@@ -249,10 +249,10 @@ def main():
     inventory_qty = defaultdict(int)
     brand_rows = {}
     with open(inv_local, 'r', encoding='utf-8') as f:
-        for row in csv.DictReader(f, delimiter='|'):
-            sku   = row.get('ManufacturerPartNumber', '').strip()
-            brand = row.get('BrandName', '').strip()
-            qty   = int(row.get('QuantityAvailable', '0') or '0')
+        for row in csv.DictReader(f):
+            sku   = (row.get('ManufacturerPartNumber') or '').strip()
+            brand = (row.get('Brand') or '').strip()
+            qty   = int(row.get('TotalQOH') or '0')
             if sku:
                 inventory_qty[sku] += qty
                 brand_rows[(brand, sku)] = row
@@ -267,7 +267,7 @@ def main():
         p = price_map.get(sku, {})
         entry = {
             'Brand':     brand,
-            'Model':     row.get('ProductDescription', '').strip(),
+            'Model':     (row.get('PartDescription') or '').strip(),
             'Pn':        sku,
             'MFG':       sku,
             'Price':     p.get('price', '0.00'),
