@@ -2,36 +2,29 @@ name: ATD Inventory Sync
 
 on:
   schedule:
-    - cron: '0 */4 * * *' # Every 4 hours
-  workflow_dispatch: # Allow manual trigger
+    - cron: '0 */4 * * *'
+  workflow_dispatch:
 
 jobs:
   sync:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install requests python-dotenv
+        run: pip install python-dotenv
 
-      - name: Run Sync Script
+      - name: Run Sync
         env:
           ATD_FTP_HOST: ${{ secrets.ATD_FTP_HOST }}
           ATD_FTP_USER: ${{ secrets.ATD_FTP_USER }}
           ATD_FTP_PASS: ${{ secrets.ATD_FTP_PASS }}
           ATD_FTP_DIR: ${{ secrets.ATD_FTP_DIR }}
-          SHOPIFY_STORE_URL: ${{ secrets.SHOPIFY_STORE_URL }}
-          SHOPIFY_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
-          SHOPIFY_LOCATION_ID: ${{ secrets.SHOPIFY_LOCATION_ID }}
           FTP_HOST: ${{ secrets.FTP_HOST }}
           FTP_USER: ${{ secrets.FTP_USER }}
           FTP_PASS: ${{ secrets.FTP_PASS }}
