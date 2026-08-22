@@ -188,43 +188,30 @@ def main():
     upload_to_wbr(tires_file,  'ATD_Tires_Inventory.csv')
     upload_to_wbr(wheels_file, 'ATD_Wheels_Inventory.csv')
 
-    # Sync to all configured Shopify stores
-    sync_all_shopify_stores(inventory_qty)
+    # Sync to Tires and Engine Performance only (SHOPIFY_STORE_URL_2 et al.)
+    sync_tep_shopify_store(inventory_qty)
 
     logging.info(f"=== ATD Sync Done in {datetime.datetime.now() - start_time} ===")
 
 
-def sync_all_shopify_stores(inventory_qty):
-    """Sync inventory to all configured Shopify stores.
-    Reads SHOPIFY_STORE_URL / SHOPIFY_ACCESS_TOKEN / SHOPIFY_LOCATION_ID
-    and optional SHOPIFY_STORE_URL_2 / _3 etc. for multi-store support.
+def sync_tep_shopify_store(inventory_qty):
+    """Sync inventory to the Tires and Engine Performance Shopify store only.
+    TEP was added today as the '_2' store credentials
+    (SHOPIFY_STORE_URL_2 / SHOPIFY_ACCESS_TOKEN_2 / SHOPIFY_LOCATION_ID_2).
+    The original unsuffixed SHOPIFY_STORE_URL / _ACCESS_TOKEN / _LOCATION_ID
+    is a different, pre-existing store and is intentionally ignored here so
+    only TEP gets inventory writes from this workflow.
     """
-    stores = []
+    url = os.environ.get('SHOPIFY_STORE_URL_2')
+    token = os.environ.get('SHOPIFY_ACCESS_TOKEN_2')
+    location = os.environ.get('SHOPIFY_LOCATION_ID_2')
 
-    # Primary store
-    url1 = os.environ.get('SHOPIFY_STORE_URL')
-    tok1 = os.environ.get('SHOPIFY_ACCESS_TOKEN')
-    loc1 = os.environ.get('SHOPIFY_LOCATION_ID')
-    if url1 and tok1 and loc1:
-        stores.append({'url': url1, 'token': tok1, 'location': loc1})
-
-    # Additional stores: _2, _3, _4 ...
-    for i in range(2, 10):
-        url_i = os.environ.get(f'SHOPIFY_STORE_URL_{i}')
-        tok_i = os.environ.get(f'SHOPIFY_ACCESS_TOKEN_{i}')
-        loc_i = os.environ.get(f'SHOPIFY_LOCATION_ID_{i}')
-        if url_i and tok_i and loc_i:
-            stores.append({'url': url_i, 'token': tok_i, 'location': loc_i})
-        else:
-            break  # Stop scanning when a gap is found
-
-    if not stores:
-        logging.info("No Shopify credentials found in environment, skipping Shopify sync.")
+    if not (url and token and location):
+        logging.info("No TEP Shopify credentials found in environment, skipping Shopify sync.")
         return
 
-    logging.info(f"Syncing inventory to {len(stores)} Shopify store(s)...")
-    for store in stores:
-        sync_shopify_inventory(inventory_qty, store['url'], store['token'], store['location'])
+    logging.info(f"Syncing inventory to Shopify store: {url}")
+    sync_shopify_inventory(inventory_qty, url, token, location)
 
 
 def sync_shopify_inventory(inventory_qty, store_url, access_token, location_id):
