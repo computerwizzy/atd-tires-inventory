@@ -2,7 +2,7 @@ name: ATD Inventory Sync
 
 on:
   schedule:
-    - cron: '0 */4 * * *'
+    - cron: '0 6 * * *'  # Runs every day at 06:00 UTC
   workflow_dispatch:
 
 jobs:
@@ -28,4 +28,11 @@ jobs:
           FTP_HOST: ${{ secrets.FTP_HOST }}
           FTP_USER: ${{ secrets.FTP_USER }}
           FTP_PASS: ${{ secrets.FTP_PASS }}
+          SHOPIFY_STORE_URL: ${{ secrets.SHOPIFY_STORE_URL }}
+          SHOPIFY_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
+          SHOPIFY_LOCATION_ID: ${{ secrets.SHOPIFY_LOCATION_ID }}
+          SHOPIFY_STORE_URL_2: ${{ secrets.SHOPIFY_STORE_URL_2 }}
+          SHOPIFY_ACCESS_TOKEN_2: ${{ secrets.SHOPIFY_ACCESS_TOKEN_2 }}
+          SHOPIFY_LOCATION_ID_2: ${{ secrets.SHOPIFY_LOCATION_ID_2 }}
         run: python scripts/sync_atd_qty_only.py
+

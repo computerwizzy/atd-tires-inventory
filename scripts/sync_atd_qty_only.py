@@ -3,9 +3,8 @@ import ftplib
 import csv
 import re
 import logging
-from dotenv import load_dotenv
-from collections import defaultdict
 import datetime
+from collections import defaultdict
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(BASE_DIR, 'logs')
@@ -20,7 +19,18 @@ logging.basicConfig(
     handlers=[logging.FileHandler(log_file), logging.StreamHandler()]
 )
 
-load_dotenv(os.path.join(BASE_DIR, '.env'))
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(BASE_DIR, '.env'))
+except ImportError:
+    env_file = os.path.join(BASE_DIR, '.env')
+    if os.path.exists(env_file):
+        with open(env_file) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    k, v = line.split('=', 1)
+                    os.environ.setdefault(k.strip(), v.strip())
 
 # ATD FTP (source)
 FTP_HOST = os.environ.get('ATD_FTP_HOST')
@@ -178,8 +188,177 @@ def main():
     upload_to_wbr(tires_file,  'ATD_Tires_Inventory.csv')
     upload_to_wbr(wheels_file, 'ATD_Wheels_Inventory.csv')
 
+    # Sync to all configured Shopify stores
+    sync_all_shopify_stores(inventory_qty)
+
     logging.info(f"=== ATD Sync Done in {datetime.datetime.now() - start_time} ===")
+
+
+def sync_all_shopify_stores(inventory_qty):
+    """Sync inventory to all configured Shopify stores.
+    Reads SHOPIFY_STORE_URL / SHOPIFY_ACCESS_TOKEN / SHOPIFY_LOCATION_ID
+    and optional SHOPIFY_STORE_URL_2 / _3 etc. for multi-store support.
+    """
+    stores = []
+
+    # Primary store
+    url1 = os.environ.get('SHOPIFY_STORE_URL')
+    tok1 = os.environ.get('SHOPIFY_ACCESS_TOKEN')
+    loc1 = os.environ.get('SHOPIFY_LOCATION_ID')
+    if url1 and tok1 and loc1:
+        stores.append({'url': url1, 'token': tok1, 'location': loc1})
+
+    # Additional stores: _2, _3, _4 ...
+    for i in range(2, 10):
+        url_i = os.environ.get(f'SHOPIFY_STORE_URL_{i}')
+        tok_i = os.environ.get(f'SHOPIFY_ACCESS_TOKEN_{i}')
+        loc_i = os.environ.get(f'SHOPIFY_LOCATION_ID_{i}')
+        if url_i and tok_i and loc_i:
+            stores.append({'url': url_i, 'token': tok_i, 'location': loc_i})
+        else:
+            break  # Stop scanning when a gap is found
+
+    if not stores:
+        logging.info("No Shopify credentials found in environment, skipping Shopify sync.")
+        return
+
+    logging.info(f"Syncing inventory to {len(stores)} Shopify store(s)...")
+    for store in stores:
+        sync_shopify_inventory(inventory_qty, store['url'], store['token'], store['location'])
+
+
+def sync_shopify_inventory(inventory_qty, store_url, access_token, location_id):
+    store_domain = store_url.replace('https://', '').replace('http://', '').strip('/')
+    gql_url = f"https://{store_domain}/admin/api/2024-01/graphql.json"
+    headers = {
+        'X-Shopify-Access-Token': access_token,
+        'Content-Type': 'application/json'
+    }
+
+    logging.info(f"Starting Shopify Inventory Sync to {store_domain}...")
+
+    def clean_sku(s):
+        if not s: return ""
+        return re.sub(r'[^A-Z0-9]', '', s.upper().strip())
+
+    clean_atd_map = {}
+    for raw_sku, qty in inventory_qty.items():
+        c = clean_sku(raw_sku)
+        if c:
+            clean_atd_map[c] = qty
+
+    has_next = True
+    cursor = None
+    updated_count = 0
+
+    import json
+    import urllib.request
+
+    while has_next:
+        after_clause = f', after: "{cursor}"' if cursor else ''
+        q = f'''
+        {{
+          products(first: 250{after_clause}) {{
+            edges {{
+              node {{
+                id
+                title
+                variants(first: 50) {{
+                  edges {{
+                    node {{
+                      id
+                      sku
+                      inventoryQuantity
+                      inventoryItem {{
+                        id
+                      }}
+                    }}
+                  }}
+                }}
+              }}
+            }}
+            pageInfo {{
+              hasNextPage
+              endCursor
+            }}
+          }}
+        }}
+        '''
+
+        try:
+            req = urllib.request.Request(gql_url, data=json.dumps({'query': q}).encode(), headers=headers, method='POST')
+            with urllib.request.urlopen(req) as resp:
+                data = json.loads(resp.read().decode())
+                prods = data.get('data', {}).get('products', {})
+                edges = prods.get('edges', [])
+                has_next = prods.get('pageInfo', {}).get('hasNextPage', False)
+                cursor = prods.get('pageInfo', {}).get('endCursor')
+
+                set_quantities = []
+                for e in edges:
+                    p_node = e['node']
+                    p_title = p_node['title']
+                    for vnode in p_node['variants']['edges']:
+                        v = vnode['node']
+                        raw_sku = (v['sku'] or '').strip()
+                        c_sku = clean_sku(raw_sku)
+                        store_qty = int(v['inventoryQuantity'] or 0)
+                        item_id = v['inventoryItem']['id']
+
+                        atd_qty = clean_atd_map.get(c_sku)
+                        if atd_qty is None and c_sku.endswith('S'): atd_qty = clean_atd_map.get(c_sku[:-1])
+                        if atd_qty is None and c_sku.endswith('C'): atd_qty = clean_atd_map.get(c_sku[:-1])
+                        if atd_qty is None: atd_qty = clean_atd_map.get(c_sku + 'S') or clean_atd_map.get(c_sku + 'C')
+
+                        if atd_qty is None:
+                            m_part = re.search(r'([0-9A-Z]{4,}-[0-9A-Z]{4,})', p_title)
+                            if m_part:
+                                alt_sku = clean_sku(m_part.group(1))
+                                atd_qty = clean_atd_map.get(alt_sku) or clean_atd_map.get(alt_sku + 'S')
+
+                        if atd_qty is not None and atd_qty != store_qty:
+                            set_quantities.append({
+                                'inventoryItemId': item_id,
+                                'locationId': location_id,
+                                'quantity': atd_qty
+                            })
+
+                for idx in range(0, len(set_quantities), 50):
+                    batch = set_quantities[idx:idx+50]
+                    mutation = '''
+                    mutation inventorySetOnHandQuantities($input: InventorySetOnHandQuantitiesInput!) {
+                      inventorySetOnHandQuantities(input: $input) {
+                        userErrors {
+                          field
+                          message
+                        }
+                      }
+                    }
+                    '''
+                    payload = {
+                        'query': mutation,
+                        'variables': {
+                            'input': {
+                                'reason': 'correction',
+                                'setQuantities': batch
+                            }
+                        }
+                    }
+                    req_mut = urllib.request.Request(gql_url, data=json.dumps(payload).encode(), headers=headers, method='POST')
+                    with urllib.request.urlopen(req_mut) as r_m:
+                        res_m = json.loads(r_m.read().decode())
+                        errs = res_m.get('data', {}).get('inventorySetOnHandQuantities', {}).get('userErrors', [])
+                        if not errs:
+                            updated_count += len(batch)
+                        else:
+                            logging.error(f"Shopify batch update error: {errs}")
+        except Exception as e:
+            logging.error(f"Shopify pagination error: {e}")
+            break
+
+    logging.info(f"Shopify Sync Complete: Updated {updated_count} variants on store.")
 
 
 if __name__ == "__main__":
     main()
+
